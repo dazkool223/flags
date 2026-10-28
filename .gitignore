@@ -1,0 +1,9 @@
+target/
+.idea/
+*.iml
+docs/
+.scratch/
+.github/
+.mvn/
+CLAUDE.md
+CONTEXT.md
