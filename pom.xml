@@ -13,6 +13,7 @@
     <module>flagkit-core</module>
     <module>flagkit-postgres</module>
     <module>flagkit-cli</module>
+    <module>flagkit-spring</module>
   </modules>
 
   <properties>
