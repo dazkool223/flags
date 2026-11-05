@@ -1,0 +1,102 @@
+
+## 0. Control: the checks must fail on a store with no compare
+No guard (must FAIL)                         FAIL  150 races | {final graph has a cycle=1, rounds where both writers won=150}
+
+## 1. Opposite prerequisites race (doc section 4, test 1)
+Multi-key txn + snapshot read                PASS  150 races
+Single doc with embedded audit               PASS  150 races
+Create-only log (put-if-absent)              PASS  150 races
+Atomic commit, no snapshot read              PASS  60 races
+Stale follower reads, CAS on leader          PASS  150 races
+Single-key CAS, one key per flag             FAIL  150 races | {final graph has a cycle=1, rounds where both writers won=19}
+Last write wins, one key per flag            FAIL  150 races | {final graph has a cycle=1, versions with two audit entries=124, rounds where both writers won=124}
+Last write wins, one document                FAIL  150 races | {acknowledged writes lost=130, rounds where both writers won=130}
+
+## 2. Mixed workload, 8 writers, readers validating every read
+Multi-key txn + snapshot read                PASS  1200 ops, 486 acked, 15 gave up, 276733 reads
+Single doc with embedded audit               PASS  1200 ops, 552 acked, 18 gave up, 266228 reads
+Create-only log (put-if-absent)              PASS  1200 ops, 552 acked, 22 gave up, 256175 reads
+Atomic commit, no snapshot read              PASS  1200 ops, 524 acked, 4 gave up, 385 reads
+Single-key CAS, one key per flag             PASS  1200 ops, 614 acked, 3 gave up, 334175 reads
+
+## 3. Snapshot reads under a two-flag write (FlagWriter has none today; import would)
+Multi-key txn + snapshot read                PASS  9297001 reads during two-flag writes
+Create-only log (put-if-absent)              PASS  43028060 reads during two-flag writes
+Atomic commit, no snapshot read              FAIL  1087 reads during two-flag writes | {reads that saw half a two-flag write=190}
+
+## 4. Lost responses, 5% of commits, on every atomic class
+Txn + DOC_LOOP                               FAIL  1200 ops, 450 acked, 13 gave up, 108665 reads | {writes audited twice=4, reported rejected but applied=3, reported failed but applied=15}
+Txn + NAIVE_RETRY                            FAIL  1200 ops, 531 acked, 5 gave up, 234448 reads | {writes audited twice=9, reported rejected but applied=12}
+Txn + WRITE_ID                               PASS  1200 ops, 594 acked, 5 gave up, 237489 reads
+Log + DOC_LOOP                               FAIL  1200 ops, 499 acked, 6 gave up, 383777 reads | {writes audited twice=2, reported rejected but applied=5, reported failed but applied=9}
+Log + NAIVE_RETRY                            FAIL  1200 ops, 570 acked, 11 gave up, 336740 reads | {writes audited twice=7, reported rejected but applied=9, reported failed but applied=1}
+Log + WRITE_ID                               PASS  1200 ops, 548 acked, 0 gave up, 184506 reads
+
+## 5. Client dies between the steps of a commit (2% of commits)
+Atomic commit (control)                      PASS  1200 ops, 531 acked, 17 gave up, 245303 reads
+Single doc, audit in a separate key          FAIL  1200 ops, 502 acked, 21 gave up, 229438 reads | {audit replay does not match the graph=1, versions with no audit entry=13}
+Single-key CAS, one key per flag             FAIL  1200 ops, 539 acked, 1 gave up, 410523 reads | {versions with no audit entry=8}
+
+## 6. Failover
+Asynchronous replication                     FAIL  primary lost mid-run | {acknowledged writes lost=1, version numbers used twice=1}
+Synchronous or majority (control)            PASS  primary lost mid-run
+
+## 7. Deleting from the version log
+Create-only log, writer may delete           FAIL  hide newest object, then write | {acknowledged writes lost=1, kill switch silently back on=1, version numbers used twice=1}
+
+## 8. Reads from a lagging follower
+Linearizable reads (control)                 PASS  attempts per op 2.3, gave up 5
+Stale follower reads                         FAIL  attempts per op 3.5, gave up 0 | {reads that went back in time=481}
+
+## 9. Retry limits on the single guard (no store faults, one flag)
+writers   window    retries   gave up    attempts/op    writes/s  
+2         1ms       3         12%        1.3            65        
+2         1ms       10        2%         1.4            64        
+2         10ms      3         8%         1.3            64        
+2         10ms      10        0%         1.5            64        
+8         1ms       3         45%        2.0            62        
+8         1ms       10        17%        2.8            63        
+8         10ms      3         49%        2.2            64        
+8         10ms      10        9%         3.9            64        
+32        1ms       3         83%        2.7            59        
+32        1ms       10        51%        6.3            57        
+32        10ms      3         82%        2.8            63        
+32        10ms      10        51%        7.3            63        
+
+## 10. Sandwich read: can a scan outrun the writers
+scan       write every    attempts/read  max          failed@20 
+50ms       500ms          1.1            2            0/30      
+50ms       100ms          2.3            3            0/30      
+50ms       25ms           20.0           20           30/30     
+50ms       5ms            20.0           20           30/30     
+
+## 11. Limits (arithmetic)
+Audit embedded in the graph document: writes until the document is full
+cap        100 flags  500 flags  2000 flags
+400 KB     779        619        19         
+512 KB     1008       848        248        
+1024 KB    2057       1897       1297       
+16384 KB   33514      33354      32754      
+
+Operations in one commit, against transaction limits of 64 and 128 operations
+flags        whole newGraph   change only 
+50           52               3           
+100          102              3           
+500          502              3           
+
+Version log: requests to find the newest of N objects, at 1000 keys per list page
+versions     ascending names    inverted names
+1000         2                  1             
+10000        11                 1             
+100000       101                1             
+
+Version log storage if each object holds the whole graph at 200 bytes a flag
+flags        versions     total MB    
+100          10000        190         
+2000         10000        3814        
+2000         100000       38146       
+
+## 12. Git file store (real git, real export format, real Evaluator)
+Git file store, flags far apart              FAIL  each PR valid alone: true, merged cleanly: true, running pod keeps the old graph | {fresh pod's first load throws InvalidGraphException=1}
+Git file store, adjacent flags               FAIL  each PR valid alone: true, merged cleanly: true, running pod keeps the old graph | {fresh pod's first load throws InvalidGraphException=1}
+Git file store, attribution                  FAIL  git log shows: someone-else <ceo@example.test> | {author is whatever the client typed=1}
